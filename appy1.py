@@ -5,6 +5,8 @@ import base64
 import uuid
 from datetime import datetime
 import os
+import streamlit.components.v1 as components
+import json
 
 # --- 1. 설정 ---
 url: str = "https://lrnutmjafqqlzopxswsa.supabase.co"
@@ -245,57 +247,197 @@ with st.form("reservation_form"):
         if not name or not phone:
             st.error("이름과 연락처는 필수입니다!")
         else:
-            # 주문번호 생성
+            # 주문번호 생성 및 세션에 저장
             order_id = f"order_{uuid.uuid4().hex[:16]}"
             order_name = f"심리상담 예약 - {name}"
             
-            # 결제 요청
-            with st.spinner("결제를 진행 중입니다..."):
-                payment_request = request_payment(order_id, DEFAULT_PAYMENT_AMOUNT, order_name, name)
-                
-                if payment_request.get("success"):
-                    payment_key = payment_request.get("paymentKey")
+            # 세션에 결제 정보 저장
+            st.session_state.pending_order_id = order_id
+            st.session_state.pending_order_name = order_name
+            st.session_state.pending_name = name
+            st.session_state.pending_phone = phone
+            st.session_state.pending_date = str(date)
+            st.session_state.pending_memo = memo
+            st.session_state.pending_amount = DEFAULT_PAYMENT_AMOUNT
+            st.session_state.show_payment_widget = True
+
+# 결제위젯 표시
+if st.session_state.get('show_payment_widget', False):
+    st.markdown("---")
+    st.subheader("💳 결제하기")
+    
+    # 토스페이먼츠 결제위젯 HTML
+    client_key = TOSS_CLIENT_KEY if TOSS_CLIENT_KEY != "test_ck_..." else "test_ck_docs_OaPz8L5KdmQXkzRZ3y47BMw6"
+    
+    payment_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <script src="https://js.tosspayments.com/v2/standard"></script>
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                padding: 20px;
+            }}
+            #payment-method {{
+                margin: 20px 0;
+            }}
+            #payment-button {{
+                background-color: #EF4444;
+                color: white;
+                border: none;
+                padding: 15px 30px;
+                font-size: 16px;
+                border-radius: 8px;
+                cursor: pointer;
+                width: 100%;
+                margin-top: 20px;
+            }}
+            #payment-button:hover {{
+                background-color: #DC2626;
+            }}
+        </style>
+    </head>
+    <body>
+        <div id="payment-method"></div>
+        <div id="agreement"></div>
+        <button id="payment-button">결제하기</button>
+        
+        <script>
+            const clientKey = "{client_key}";
+            const customerKey = "customer_{uuid.uuid4().hex[:16]}";
+            const orderId = "{st.session_state.pending_order_id}";
+            const orderName = "{st.session_state.pending_order_name}";
+            const amount = {st.session_state.pending_amount};
+            const customerName = "{st.session_state.pending_name}";
+            const customerPhone = "{st.session_state.pending_phone.replace('-', '')}";
+            
+            const tossPayments = TossPayments(clientKey);
+            const widgets = tossPayments.widgets({{ customerKey: TossPayments.ANONYMOUS }});
+            
+            async function initPayment() {{
+                try {{
+                    // 결제 금액 설정
+                    await widgets.setAmount({{
+                        currency: 'KRW',
+                        value: amount
+                    }});
                     
-                    # 결제 승인 (검증 포함)
-                    confirm_result = confirm_payment(payment_key, order_id, DEFAULT_PAYMENT_AMOUNT)
+                    // 결제 UI 렌더링
+                    await Promise.all([
+                        widgets.renderPaymentMethods({{
+                            selector: '#payment-method',
+                            variantKey: 'DEFAULT'
+                        }}),
+                        widgets.renderAgreement({{
+                            selector: '#agreement',
+                            variantKey: 'AGREEMENT'
+                        }})
+                    ]);
                     
-                    if confirm_result.get("success"):
-                        payment_data = confirm_result.get("data", {})
-                        
-                        # 결제 검증: 금액 확인
-                        confirmed_amount = payment_data.get("totalAmount", DEFAULT_PAYMENT_AMOUNT)
-                        if confirmed_amount == DEFAULT_PAYMENT_AMOUNT:
-                            # 결제 완료 후 예약 저장
-                            save_result = save_to_supabase(
-                                name, phone, date, memo,
-                                payment_key=payment_key,
-                                order_id=order_id,
-                                amount=DEFAULT_PAYMENT_AMOUNT,
-                                payment_status="PAID"
-                            )
+                    // 결제 버튼 클릭 이벤트
+                    document.getElementById('payment-button').addEventListener('click', async function() {{
+                        try {{
+                            const result = await widgets.requestPayment({{
+                                orderId: orderId,
+                                orderName: orderName,
+                                customerName: customerName,
+                                customerMobilePhone: customerPhone,
+                                successUrl: window.location.href + '?payment=success&orderId=' + orderId,
+                                failUrl: window.location.href + '?payment=fail&orderId=' + orderId
+                            }});
                             
-                            if save_result == True:
-                                st.success(f"✅ 결제가 완료되었고, {name}님의 예약이 확정되었습니다!")
-                                st.balloons()
+                            // 결제 성공 시 - 결제 승인은 서버에서 처리
+                            if (result.paymentKey) {{
+                                // Streamlit에 결과 전달
+                                const message = {{
+                                    type: 'payment_success',
+                                    paymentKey: result.paymentKey,
+                                    orderId: result.orderId,
+                                    amount: result.amount.value
+                                }};
                                 
-                                # 세션 상태 업데이트
-                                st.session_state.payment_completed = True
-                                st.session_state.current_order_id = order_id
-                                st.session_state.current_payment_key = payment_key
-                                st.session_state.current_amount = DEFAULT_PAYMENT_AMOUNT
+                                // iframe에서 부모로 메시지 전송
+                                if (window.parent !== window) {{
+                                    window.parent.postMessage(message, '*');
+                                }}
                                 
-                                st.rerun()
-                            else:
-                                st.error(f"예약 저장 실패: {save_result}")
-                        else:
-                            st.error(f"❌ 결제 금액이 일치하지 않습니다. (요청: {DEFAULT_PAYMENT_AMOUNT:,}원, 승인: {confirmed_amount:,}원)")
-                    else:
-                        error_info = confirm_result.get('error', {})
-                        error_code = error_info.get('code', 'UNKNOWN')
-                        error_message = error_info.get('message', str(error_info))
-                        st.error(f"❌ 결제 승인 실패: [{error_code}] {error_message}")
+                                // 페이지 리로드를 통해 결과 전달
+                                window.location.href = window.location.href.split('?')[0] + 
+                                    '?payment=success&paymentKey=' + result.paymentKey + 
+                                    '&orderId=' + result.orderId;
+                            }}
+                        }} catch (error) {{
+                            console.error('결제 실패:', error);
+                            alert('결제 실패: ' + error.message);
+                        }}
+                    }});
+                }} catch (error) {{
+                    console.error('초기화 실패:', error);
+                }}
+            }}
+            
+            // 페이지 로드 시 초기화
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', initPayment);
+            }} else {{
+                initPayment();
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    
+    # 결제위젯 표시
+    components.html(payment_html, height=800)
+    
+    # 결제 완료 확인 버튼 (테스트용)
+    st.info("💡 **테스트 모드**: 결제위젯에서 테스트 카드번호를 입력하세요. 테스트 카드: 1234-5678-9012-3456 (유효기간: 12/34, CVC: 123)")
+    
+    # 결제 완료 후 수동 확인 (실제 환경에서는 자동 처리)
+    if st.button("✅ 결제 완료 확인", key="confirm_payment_manual"):
+        # 테스트용: 결제 완료 처리
+        order_id_from_result = st.session_state.pending_order_id
+        payment_key = f"test_payment_{order_id_from_result}"
+        
+        with st.spinner("결제를 확인 중입니다..."):
+            confirm_result = confirm_payment(payment_key, order_id_from_result, st.session_state.pending_amount)
+            
+            if confirm_result.get("success"):
+                # 예약 저장
+                save_result = save_to_supabase(
+                    st.session_state.pending_name,
+                    st.session_state.pending_phone,
+                    st.session_state.pending_date,
+                    st.session_state.pending_memo,
+                    payment_key=payment_key,
+                    order_id=order_id_from_result,
+                    amount=st.session_state.pending_amount,
+                    payment_status="PAID"
+                )
+                
+                if save_result == True:
+                    st.success(f"✅ 결제가 완료되었고, {st.session_state.pending_name}님의 예약이 확정되었습니다!")
+                    st.balloons()
+                    
+                    # 세션 상태 초기화
+                    st.session_state.payment_completed = True
+                    st.session_state.current_order_id = order_id_from_result
+                    st.session_state.current_payment_key = payment_key
+                    st.session_state.current_amount = st.session_state.pending_amount
+                    st.session_state.show_payment_widget = False
+                    
+                    st.rerun()
                 else:
-                    st.error(f"결제 요청 실패: {payment_request.get('error')}")
+                    st.error(f"예약 저장 실패: {save_result}")
+            else:
+                st.error("결제 승인 실패")
+    
+    # 결제 취소 버튼
+    if st.button("❌ 결제 취소", key="cancel_payment_widget"):
+        st.session_state.show_payment_widget = False
+        st.rerun()
 
 # 결제 취소 섹션
 if st.session_state.payment_completed and st.session_state.current_payment_key:
