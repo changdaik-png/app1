@@ -380,92 +380,115 @@ if st.session_state.get('show_payment_widget', False):
         <button id="payment-button">결제하기</button>
         
         <script>
-            const clientKey = "{client_key}";
-            const customerKey = "customer_{uuid.uuid4().hex[:16]}";
-            const orderId = "{st.session_state.pending_order_id}";
-            const orderName = "{st.session_state.pending_order_name}";
-            const amount = {st.session_state.pending_amount};
-            const customerName = "{st.session_state.pending_name}";
-            const customerPhone = "{st.session_state.pending_phone.replace('-', '') if st.session_state.pending_phone else ''}";
-            
-            const tossPayments = TossPayments(clientKey);
-            const widgets = tossPayments.widgets({{ customerKey: TossPayments.ANONYMOUS }});
-            
-            async function initPayment() {{
+            (function() {{
                 try {{
-                    // 결제 금액 설정
-                    await widgets.setAmount({{
-                        currency: 'KRW',
-                        value: amount
-                    }});
+                    const clientKey = "{client_key}";
+                    const customerKey = "customer_{uuid.uuid4().hex[:16]}";
+                    const orderId = "{st.session_state.pending_order_id}";
+                    const orderName = "{st.session_state.pending_order_name}";
+                    const amount = {st.session_state.pending_amount};
+                    const customerName = "{st.session_state.pending_name}";
+                    const customerPhone = "{st.session_state.pending_phone.replace('-', '') if st.session_state.pending_phone else ''}";
                     
-                    // 결제 UI 렌더링
-                    await Promise.all([
-                        widgets.renderPaymentMethods({{
-                            selector: '#payment-method',
-                            variantKey: 'DEFAULT'
-                        }}),
-                        widgets.renderAgreement({{
-                            selector: '#agreement',
-                            variantKey: 'AGREEMENT'
-                        }})
-                    ]);
+                    console.log('결제위젯 초기화 시작...', {{ clientKey, orderId, amount }});
                     
-                    // 결제 버튼 클릭 이벤트
-                    document.getElementById('payment-button').addEventListener('click', async function() {{
+                    // TossPayments SDK 로드 확인
+                    if (typeof TossPayments === 'undefined') {{
+                        console.error('TossPayments SDK가 로드되지 않았습니다.');
+                        document.getElementById('payment-method').innerHTML = 
+                            '<div style="color: red; padding: 20px;">결제위젯을 로드할 수 없습니다. 페이지를 새로고침해주세요.</div>';
+                        return;
+                    }}
+                    
+                    const tossPayments = TossPayments(clientKey);
+                    const widgets = tossPayments.widgets({{ customerKey: TossPayments.ANONYMOUS }});
+                    
+                    async function initPayment() {{
                         try {{
-                            const result = await widgets.requestPayment({{
-                                orderId: orderId,
-                                orderName: orderName,
-                                customerName: customerName,
-                                customerMobilePhone: customerPhone,
-                                successUrl: window.location.href + '?payment=success&orderId=' + orderId,
-                                failUrl: window.location.href + '?payment=fail&orderId=' + orderId
+                            console.log('결제 금액 설정 중...', amount);
+                            // 결제 금액 설정
+                            await widgets.setAmount({{
+                                currency: 'KRW',
+                                value: amount
                             }});
                             
-                            // 결제 성공 시 - 결제 승인은 서버에서 처리
-                            if (result.paymentKey) {{
-                                // Streamlit에 결과 전달
-                                const message = {{
-                                    type: 'payment_success',
-                                    paymentKey: result.paymentKey,
-                                    orderId: result.orderId,
-                                    amount: result.amount.value
-                                }};
-                                
-                                // iframe에서 부모로 메시지 전송
-                                if (window.parent !== window) {{
-                                    window.parent.postMessage(message, '*');
-                                }}
-                                
-                                // 페이지 리로드를 통해 결과 전달
-                                window.location.href = window.location.href.split('?')[0] + 
-                                    '?payment=success&paymentKey=' + result.paymentKey + 
-                                    '&orderId=' + result.orderId;
+                            console.log('결제 UI 렌더링 중...');
+                            // 결제 UI 렌더링
+                            await Promise.all([
+                                widgets.renderPaymentMethods({{
+                                    selector: '#payment-method',
+                                    variantKey: 'DEFAULT'
+                                }}),
+                                widgets.renderAgreement({{
+                                    selector: '#agreement',
+                                    variantKey: 'AGREEMENT'
+                                }})
+                            ]);
+                            
+                            console.log('결제위젯 렌더링 완료');
+                            
+                            // 결제 버튼 클릭 이벤트
+                            const paymentButton = document.getElementById('payment-button');
+                            if (paymentButton) {{
+                                paymentButton.addEventListener('click', async function() {{
+                                    try {{
+                                        console.log('결제 요청 시작...');
+                                        const result = await widgets.requestPayment({{
+                                            orderId: orderId,
+                                            orderName: orderName,
+                                            customerName: customerName,
+                                            customerMobilePhone: customerPhone
+                                        }});
+                                        
+                                        console.log('결제 성공:', result);
+                                        
+                                        // 결제 성공 시
+                                        if (result.paymentKey) {{
+                                            alert('결제가 완료되었습니다! 결제 완료 확인 버튼을 클릭해주세요.');
+                                            // 부모 창에 메시지 전송
+                                            if (window.parent && window.parent !== window) {{
+                                                window.parent.postMessage({{
+                                                    type: 'payment_success',
+                                                    paymentKey: result.paymentKey,
+                                                    orderId: result.orderId,
+                                                    amount: result.amount.value
+                                                }}, '*');
+                                            }}
+                                        }}
+                                    }} catch (error) {{
+                                        console.error('결제 실패:', error);
+                                        alert('결제 실패: ' + (error.message || '알 수 없는 오류'));
+                                    }}
+                                }});
                             }}
                         }} catch (error) {{
-                            console.error('결제 실패:', error);
-                            alert('결제 실패: ' + error.message);
+                            console.error('초기화 실패:', error);
+                            document.getElementById('payment-method').innerHTML = 
+                                '<div style="color: red; padding: 20px;">결제위젯 초기화 실패: ' + error.message + '</div>';
                         }}
-                    }});
+                    }}
+                    
+                    // 페이지 로드 시 초기화
+                    if (document.readyState === 'loading') {{
+                        document.addEventListener('DOMContentLoaded', initPayment);
+                    }} else {{
+                        initPayment();
+                    }}
                 }} catch (error) {{
-                    console.error('초기화 실패:', error);
+                    console.error('스크립트 실행 오류:', error);
                 }}
-            }}
-            
-            // 페이지 로드 시 초기화
-            if (document.readyState === 'loading') {{
-                document.addEventListener('DOMContentLoaded', initPayment);
-            }} else {{
-                initPayment();
-            }}
+            }})();
         </script>
     </body>
     </html>
     """
     
-    # 결제위젯 표시
-    components.html(payment_html, height=800)
+    # 결제위젯 표시 (iframe sandbox 속성 추가)
+    components.html(
+        payment_html, 
+        height=800,
+        scrolling=True
+    )
     
     # 결제 완료 확인 버튼 (테스트용)
     st.info("💡 **테스트 모드**: 결제위젯에서 테스트 카드번호를 입력하세요. 테스트 카드: 1234-5678-9012-3456 (유효기간: 12/34, CVC: 123)")
