@@ -29,7 +29,7 @@ def get_toss_secret_key():
     return key if key else "test_sk_..."
 
 def get_toss_client_key():
-    """토스페이먼츠 결제위젯 연동 키 가져오기 (Widget Client Key)"""
+    """토스페이먼츠 클라이언트 키 가져오기 (결제창용 - API 개별 연동 키 사용 가능)"""
     key = os.getenv("TOSS_CLIENT_KEY", "")
     if not key and hasattr(st, 'secrets'):
         try:
@@ -39,12 +39,10 @@ def get_toss_client_key():
                 key = getattr(st.secrets, "TOSS_CLIENT_KEY", "")
         except:
             pass
-    # 결제위젯 연동 키는 test_ck_ 또는 live_ck_로 시작해야 함
-    # API 개별 연동 키(test_ok_, live_ok_)는 사용 불가
-    if key and not (key.startswith("test_ck_") or key.startswith("live_ck_")):
-        st.warning(f"⚠️ 잘못된 클라이언트 키 형식입니다. 결제위젯 연동 키(test_ck_ 또는 live_ck_로 시작)를 사용해야 합니다.")
-        key = ""  # 잘못된 키는 무시
-    return key if key else "test_ck_docs_OaPz8L5KdmQXkzRZ3y47BMw6"  # 토스페이먼츠 샌드박스 테스트 키
+    # 결제창은 API 개별 연동 키(test_gck_, live_gck_) 또는 결제위젯 연동 키(test_ck_, live_ck_) 모두 사용 가능
+    # 기본값: 토스페이먼츠 문서 테스트 키 (API 개별 연동 키)
+    # 참고: test_gck_로 시작하는 키는 API 개별 연동 키입니다
+    return key if key else "test_gck_docs_OaPz8L5KdmQXkzRZ3y47BMw6"  # 토스페이먼츠 문서 테스트 키
 
 TOSS_SECRET_KEY = get_toss_secret_key()
 TOSS_CLIENT_KEY = get_toss_client_key()
@@ -341,29 +339,20 @@ else:
             if idx < len(reservations):
                 st.markdown("---")
 
-# 결제위젯 표시
+# 결제창 표시 (결제위젯 대신 결제창 사용 - 더 간단하고 테스트 용이)
 if st.session_state.get('show_payment_widget', False):
     st.markdown("---")
     st.subheader("💳 결제하기")
     
-    # 토스페이먼츠 결제위젯 HTML
-    # 결제위젯 연동 키 사용 (test_ck_ 또는 live_ck_로 시작)
+    # 토스페이먼츠 결제창 HTML
+    # 결제창은 API 개별 연동 키(test_gck_, live_gck_) 또는 결제위젯 연동 키(test_ck_, live_ck_) 모두 사용 가능
     client_key = TOSS_CLIENT_KEY
     
-    # 클라이언트 키 검증 및 안내
-    if not client_key or (not client_key.startswith('test_ck_') and not client_key.startswith('live_ck_')):
-        st.error("⚠️ **결제위젯 연동 키 오류**: 결제위젯을 사용하려면 `test_ck_` 또는 `live_ck_`로 시작하는 결제위젯 연동 키가 필요합니다. API 개별 연동 키(`test_ok_`, `live_ok_`)는 사용할 수 없습니다.")
-        st.info("💡 **해결 방법**: 토스페이먼츠 개발자센터 > API 키 > 결제위젯 연동 키에서 올바른 키를 확인하세요.")
-        st.code(f"현재 키: {client_key}", language="text")
-        if st.button("❌ 결제 취소", key="cancel_payment_widget_error"):
-            st.session_state.show_payment_widget = False
-            st.rerun()
-    else:
-        # 전화번호에서 하이픈 제거 (Python에서 미리 처리)
-        customer_phone_clean = st.session_state.pending_phone.replace('-', '') if st.session_state.pending_phone else ''
-        
-        # 결제위젯 HTML 생성
-        payment_html = f"""
+    # 전화번호에서 하이픈 제거 (Python에서 미리 처리)
+    customer_phone_clean = st.session_state.pending_phone.replace('-', '') if st.session_state.pending_phone else ''
+    
+    # 결제창 HTML 생성 (결제위젯 대신 결제창 사용)
+    payment_html = f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -409,20 +398,7 @@ if st.session_state.get('show_payment_widget', False):
                     const customerName = "{st.session_state.pending_name}";
                     const customerPhone = "{customer_phone_clean}";
                     
-                    console.log('결제위젯 초기화 시작...', {{ clientKey, orderId, amount }});
-                    
-                    // 클라이언트 키 형식 검증
-                    if (!clientKey || (!clientKey.startsWith('test_ck_') && !clientKey.startsWith('live_ck_'))) {{
-                        const errorMsg = '결제위젯 연동 키가 올바르지 않습니다. test_ck_ 또는 live_ck_로 시작하는 결제위젯 연동 키를 사용해야 합니다.';
-                        console.error(errorMsg);
-                        document.getElementById('payment-method').innerHTML = 
-                            '<div style="color: red; padding: 20px; border: 1px solid red; border-radius: 8px; margin: 20px 0;">' +
-                            '<strong>오류:</strong><br>' + errorMsg + '<br><br>' +
-                            '현재 사용 중인 키: ' + (clientKey || '없음') + '<br>' +
-                            '토스페이먼츠 개발자센터에서 결제위젯 연동 키를 확인하세요.' +
-                            '</div>';
-                        return;
-                    }}
+                    console.log('결제창 초기화 시작...', {{ clientKey, orderId, amount }});
                     
                     // TossPayments SDK 로드 확인
                     if (typeof TossPayments === 'undefined') {{
@@ -435,124 +411,166 @@ if st.session_state.get('show_payment_widget', False):
                     }}
                     
                     let tossPayments;
-                    let widgets;
+                    let payment;
                     
                     try {{
                         // TossPayments 초기화
                         tossPayments = TossPayments(clientKey);
                         console.log('TossPayments 초기화 성공');
                         
-                        // 결제위젯 인스턴스 생성
-                        widgets = tossPayments.widgets({{ customerKey: TossPayments.ANONYMOUS }});
-                        console.log('결제위젯 인스턴스 생성 성공');
+                        // 결제창 인스턴스 생성 (결제위젯 대신 결제창 사용)
+                        payment = tossPayments.payment({{ customerKey: TossPayments.ANONYMOUS }});
+                        console.log('결제창 인스턴스 생성 성공');
                     }} catch (initError) {{
                         console.error('TossPayments 초기화 실패:', initError);
                         const errorMsg = initError.message || '알 수 없는 오류';
                         document.getElementById('payment-method').innerHTML = 
                             '<div style="color: red; padding: 20px; border: 1px solid red; border-radius: 8px; margin: 20px 0;">' +
                             '<strong>초기화 오류:</strong><br>' + errorMsg + '<br><br>' +
-                            '결제위젯 연동 키를 확인하세요. API 개별 연동 키는 사용할 수 없습니다.' +
+                            '클라이언트 키를 확인하세요.' +
                             '</div>';
                         return;
                     }}
                     
-                    async function initPayment() {{
-                        try {{
-                            if (!widgets) {{
-                                throw new Error('결제위젯 인스턴스가 생성되지 않았습니다.');
-                            }}
-                            
-                            console.log('결제 금액 설정 중...', amount);
-                            // 결제 금액 설정
-                            await widgets.setAmount({{
-                                currency: 'KRW',
-                                value: amount
-                            }});
-                            console.log('결제 금액 설정 완료');
-                            
-                            console.log('결제 UI 렌더링 중...');
-                            // 결제 UI 렌더링
-                            await Promise.all([
-                                widgets.renderPaymentMethods({{
-                                    selector: '#payment-method',
-                                    variantKey: 'DEFAULT'
-                                }}),
-                                widgets.renderAgreement({{
-                                    selector: '#agreement',
-                                    variantKey: 'AGREEMENT'
-                                }})
-                            ]);
-                            
-                            console.log('결제위젯 렌더링 완료');
-                            
-                            // 결제 버튼 클릭 이벤트
-                            const paymentButton = document.getElementById('payment-button');
-                            if (paymentButton) {{
-                                paymentButton.addEventListener('click', async function() {{
-                                    try {{
-                                        console.log('결제 요청 시작...');
-                                        const result = await widgets.requestPayment({{
-                                            orderId: orderId,
-                                            orderName: orderName,
-                                            customerName: customerName,
-                                            customerMobilePhone: customerPhone
-                                        }});
-                                        
-                                        console.log('결제 성공:', result);
-                                        
-                                        // 결제 성공 시
-                                        if (result.paymentKey) {{
-                                            alert('결제가 완료되었습니다! 결제 완료 확인 버튼을 클릭해주세요.');
-                                            // 부모 창에 메시지 전송
-                                            if (window.parent && window.parent !== window) {{
-                                                window.parent.postMessage({{
-                                                    type: 'payment_success',
-                                                    paymentKey: result.paymentKey,
-                                                    orderId: result.orderId,
-                                                    amount: result.amount.value
-                                                }}, '*');
-                                            }}
-                                        }}
-                                    }} catch (error) {{
-                                        console.error('결제 실패:', error);
-                                        alert('결제 실패: ' + (error.message || '알 수 없는 오류'));
+                    // 결제 버튼 클릭 이벤트
+                    const paymentButton = document.getElementById('payment-button');
+                    if (paymentButton) {{
+                        paymentButton.addEventListener('click', async function() {{
+                            try {{
+                                console.log('결제 요청 시작...');
+                                
+                                // 결제창 열기 (카드 결제)
+                                await payment.requestPayment({{
+                                    method: 'CARD', // 카드 결제
+                                    amount: {{
+                                        currency: 'KRW',
+                                        value: amount
+                                    }},
+                                    orderId: orderId,
+                                    orderName: orderName,
+                                    successUrl: window.location.href.split('?')[0] + '?payment=success&orderId=' + orderId,
+                                    failUrl: window.location.href.split('?')[0] + '?payment=fail&orderId=' + orderId,
+                                    customerName: customerName,
+                                    customerMobilePhone: customerPhone,
+                                    card: {{
+                                        useEscrow: false,
+                                        flowMode: 'DEFAULT',
+                                        useCardPoint: false,
+                                        useAppCardOnly: false
                                     }}
                                 }});
+                                
+                                console.log('결제창이 열렸습니다.');
+                            }} catch (error) {{
+                                console.error('결제 실패:', error);
+                                alert('결제 실패: ' + (error.message || '알 수 없는 오류'));
                             }}
-                        }} catch (error) {{
-                            console.error('초기화 실패:', error);
-                            document.getElementById('payment-method').innerHTML = 
-                                '<div style="color: red; padding: 20px;">결제위젯 초기화 실패: ' + error.message + '</div>';
-                        }}
+                        }});
                     }}
                     
-                    // 페이지 로드 시 초기화
-                    if (document.readyState === 'loading') {{
-                        document.addEventListener('DOMContentLoaded', initPayment);
-                    }} else {{
-                        initPayment();
-                    }}
+                    // 결제창 안내 메시지
+                    document.getElementById('payment-method').innerHTML = 
+                        '<div style="padding: 20px; background-color: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 8px; margin: 20px 0;">' +
+                        '<h3 style="margin-top: 0; color: #0369a1;">💳 결제창 안내</h3>' +
+                        '<p>아래 "결제하기" 버튼을 클릭하면 결제창이 열립니다.</p>' +
+                        '<p><strong>테스트 카드 정보:</strong></p>' +
+                        '<ul style="margin: 10px 0;">' +
+                        '<li>카드번호: <code>1234-5678-9012-3456</code></li>' +
+                        '<li>유효기간: <code>12/34</code></li>' +
+                        '<li>CVC: <code>123</code></li>' +
+                        '<li>비밀번호: <code>123456</code></li>' +
+                        '</ul>' +
+                        '<p style="color: #0369a1; font-size: 14px;">테스트 환경에서는 실제 결제가 발생하지 않습니다.</p>' +
+                        '</div>';
+                    
                 }} catch (error) {{
                     console.error('스크립트 실행 오류:', error);
+                    document.getElementById('payment-method').innerHTML = 
+                        '<div style="color: red; padding: 20px;">오류 발생: ' + error.message + '</div>';
                 }}
             }})();
         </script>
     </body>
     </html>
-        """
+    """
+    
+    # 결제창 표시
+    components.html(
+        payment_html, 
+        height=600,
+        scrolling=True
+    )
+    
+    # 결제 완료 확인 버튼 (테스트용)
+    st.info("💡 **테스트 모드**: 결제하기 버튼을 클릭하면 결제창이 열립니다. 테스트 카드: 1234-5678-9012-3456 (유효기간: 12/34, CVC: 123)")
+    
+    # URL 파라미터 확인 (결제 완료 후 리다이렉트)
+    try:
+        # Streamlit의 쿼리 파라미터 확인 (최신 버전)
+        if hasattr(st, 'query_params'):
+            query_params = st.query_params
+        elif hasattr(st, 'experimental_get_query_params'):
+            query_params = st.experimental_get_query_params()
+        else:
+            query_params = {}
         
-        # 결제위젯 표시 (iframe sandbox 속성 추가)
-        components.html(
-            payment_html, 
-            height=800,
-            scrolling=True
-        )
-        
-        # 결제 완료 확인 버튼 (테스트용)
-        st.info("💡 **테스트 모드**: 결제위젯에서 테스트 카드번호를 입력하세요. 테스트 카드: 1234-5678-9012-3456 (유효기간: 12/34, CVC: 123)")
-        
-        # 결제 완료 후 수동 확인 (실제 환경에서는 자동 처리)
-        if st.button("✅ 결제 완료 확인", key="confirm_payment_manual"):
+        # 결제 성공 확인
+        if query_params.get('payment') == ['success']:
+            payment_key = query_params.get('paymentKey', [None])
+            order_id_from_url = query_params.get('orderId', [None])
+            
+            if isinstance(payment_key, list):
+                payment_key = payment_key[0] if payment_key else None
+            if isinstance(order_id_from_url, list):
+                order_id_from_url = order_id_from_url[0] if order_id_from_url else None
+            
+            if payment_key and order_id_from_url == st.session_state.pending_order_id:
+                with st.spinner("결제를 확인 중입니다..."):
+                    confirm_result = confirm_payment(payment_key, order_id_from_url, st.session_state.pending_amount)
+                    
+                    if confirm_result.get("success"):
+                        # 예약 저장
+                        save_result = save_to_supabase(
+                            st.session_state.pending_name,
+                            st.session_state.pending_phone,
+                            st.session_state.pending_date,
+                            st.session_state.pending_memo,
+                            payment_key=payment_key,
+                            order_id=order_id_from_url,
+                            amount=st.session_state.pending_amount,
+                            payment_status="PAID"
+                        )
+                        
+                        if save_result == True:
+                            st.success(f"✅ 결제가 완료되었고, {st.session_state.pending_name}님의 예약이 확정되었습니다!")
+                            st.balloons()
+                            
+                            # 세션 상태 초기화
+                            st.session_state.payment_completed = True
+                            st.session_state.current_order_id = order_id_from_url
+                            st.session_state.current_payment_key = payment_key
+                            st.session_state.current_amount = st.session_state.pending_amount
+                            st.session_state.show_payment_widget = False
+                            
+                            # 쿼리 파라미터 제거
+                            if hasattr(st, 'query_params'):
+                                st.query_params.clear()
+                            elif hasattr(st, 'experimental_set_query_params'):
+                                st.experimental_set_query_params()
+                            
+                            st.rerun()
+                        else:
+                            st.error(f"예약 저장 실패: {save_result}")
+                    else:
+                        st.error("결제 승인 실패")
+        elif query_params.get('payment') == ['fail']:
+            st.error("결제가 실패했습니다.")
+    except Exception as e:
+        # 쿼리 파라미터 처리 실패 시 무시 (옵션)
+        pass
+    
+    # 결제 완료 후 수동 확인 (테스트용 - 결제창에서 결제 완료 후 사용)
+    if st.button("✅ 결제 완료 확인", key="confirm_payment_manual"):
             # 테스트용: 결제 완료 처리
             order_id_from_result = st.session_state.pending_order_id
             payment_key = f"test_payment_{order_id_from_result}"
@@ -589,9 +607,9 @@ if st.session_state.get('show_payment_widget', False):
                         st.error(f"예약 저장 실패: {save_result}")
                 else:
                     st.error("결제 승인 실패")
-        
-        # 결제 취소 버튼
-        if st.button("❌ 결제 취소", key="cancel_payment_widget"):
+    
+    # 결제 취소 버튼
+    if st.button("❌ 결제 취소", key="cancel_payment_widget"):
             st.session_state.show_payment_widget = False
             st.rerun()
 
