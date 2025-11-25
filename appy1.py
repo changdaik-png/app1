@@ -261,6 +261,81 @@ with st.form("reservation_form"):
             st.session_state.pending_amount = DEFAULT_PAYMENT_AMOUNT
             st.session_state.show_payment_widget = True
 
+# --- 현재 예약된 명단 표시 (결제위젯 전에 표시) ---
+st.markdown("---")
+st.subheader("📋 현재 예약된 명단")
+
+# 예약 목록 가져오기
+reservations = get_reservations()
+
+if not reservations:
+    st.info("📭 아직 예약된 내역이 없습니다.")
+else:
+    # 예약 목록을 카드 형태로 표시
+    for idx, reservation in enumerate(reservations, 1):
+        with st.container():
+            col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1, 1])
+            
+            with col1:
+                st.write(f"**{reservation.get('name', 'N/A')}**")
+            
+            with col2:
+                st.write(f"📞 {reservation.get('phone', 'N/A')}")
+            
+            with col3:
+                date_str = reservation.get('date', 'N/A')
+                st.write(f"📅 {date_str}")
+            
+            # 결제 상태 표시
+            payment_status = reservation.get('payment_status', 'N/A')
+            payment_key = reservation.get('payment_key')
+            amount = reservation.get('amount', 0)
+            
+            with col4:
+                if payment_status == "PAID":
+                    st.success("💰 결제완료")
+                elif payment_status == "CANCELED":
+                    st.error("❌ 취소됨")
+                else:
+                    st.warning("⏳ 대기중")
+            
+            with col5:
+                # 결제 취소 버튼 (결제 완료된 경우만)
+                if payment_status == "PAID" and payment_key:
+                    if st.button("🗑️ 취소", key=f"cancel_{reservation.get('id', idx)}"):
+                        with st.spinner("결제 취소 중..."):
+                            cancel_result = cancel_payment(payment_key, "관리자 취소")
+                            
+                            if cancel_result.get("success"):
+                                # 결제 상태 업데이트
+                                update_payment_status(reservation.get('id'), payment_key, "CANCELED")
+                                st.success("결제가 취소되었습니다!")
+                                st.rerun()
+                            else:
+                                st.error(f"취소 실패: {cancel_result.get('error')}")
+                else:
+                    # 삭제 버튼 (결제가 안 된 경우)
+                    if st.button("🗑️", key=f"delete_{reservation.get('id', idx)}"):
+                        try:
+                            supabase.table("reservations").delete().eq("id", reservation.get('id')).execute()
+                            st.success("예약이 삭제되었습니다!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"삭제 실패: {str(e)}")
+            
+            # 결제 정보 표시
+            if amount:
+                st.caption(f"💳 결제 금액: {amount:,}원")
+            
+            # 메모가 있으면 표시
+            memo = reservation.get('memo', '')
+            if memo:
+                st.caption(f"💬 {memo}")
+            
+            # 구분선
+            if idx < len(reservations):
+                st.markdown("---")
+
 # 결제위젯 표시
 if st.session_state.get('show_payment_widget', False):
     st.markdown("---")
@@ -311,7 +386,7 @@ if st.session_state.get('show_payment_widget', False):
             const orderName = "{st.session_state.pending_order_name}";
             const amount = {st.session_state.pending_amount};
             const customerName = "{st.session_state.pending_name}";
-            const customerPhone = "{st.session_state.pending_phone.replace('-', '')}";
+            const customerPhone = "{st.session_state.pending_phone.replace('-', '') if st.session_state.pending_phone else ''}";
             
             const tossPayments = TossPayments(clientKey);
             const widgets = tossPayments.widgets({{ customerKey: TossPayments.ANONYMOUS }});
@@ -462,78 +537,3 @@ if st.session_state.payment_completed and st.session_state.current_payment_key:
                         st.error(f"예약 삭제 실패: {str(e)}")
                 else:
                     st.error(f"결제 취소 실패: {cancel_result.get('error')}")
-
-# --- 현재 예약된 명단 표시 ---
-st.markdown("---")
-st.subheader("📋 현재 예약된 명단")
-
-# 예약 목록 가져오기
-reservations = get_reservations()
-
-if not reservations:
-    st.info("📭 아직 예약된 내역이 없습니다.")
-else:
-    # 예약 목록을 카드 형태로 표시
-    for idx, reservation in enumerate(reservations, 1):
-        with st.container():
-            col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1, 1])
-            
-            with col1:
-                st.write(f"**{reservation.get('name', 'N/A')}**")
-            
-            with col2:
-                st.write(f"📞 {reservation.get('phone', 'N/A')}")
-            
-            with col3:
-                date_str = reservation.get('date', 'N/A')
-                st.write(f"📅 {date_str}")
-            
-            # 결제 상태 표시
-            payment_status = reservation.get('payment_status', 'N/A')
-            payment_key = reservation.get('payment_key')
-            amount = reservation.get('amount', 0)
-            
-            with col4:
-                if payment_status == "PAID":
-                    st.success("💰 결제완료")
-                elif payment_status == "CANCELED":
-                    st.error("❌ 취소됨")
-                else:
-                    st.warning("⏳ 대기중")
-            
-            with col5:
-                # 결제 취소 버튼 (결제 완료된 경우만)
-                if payment_status == "PAID" and payment_key:
-                    if st.button("🗑️ 취소", key=f"cancel_{reservation.get('id', idx)}"):
-                        with st.spinner("결제 취소 중..."):
-                            cancel_result = cancel_payment(payment_key, "관리자 취소")
-                            
-                            if cancel_result.get("success"):
-                                # 결제 상태 업데이트
-                                update_payment_status(reservation.get('id'), payment_key, "CANCELED")
-                                st.success("결제가 취소되었습니다!")
-                                st.rerun()
-                            else:
-                                st.error(f"취소 실패: {cancel_result.get('error')}")
-                else:
-                    # 삭제 버튼 (결제가 안 된 경우)
-                    if st.button("🗑️", key=f"delete_{reservation.get('id', idx)}"):
-                        try:
-                            supabase.table("reservations").delete().eq("id", reservation.get('id')).execute()
-                            st.success("예약이 삭제되었습니다!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"삭제 실패: {str(e)}")
-            
-            # 결제 정보 표시
-            if amount:
-                st.caption(f"💳 결제 금액: {amount:,}원")
-            
-            # 메모가 있으면 표시
-            memo = reservation.get('memo', '')
-            if memo:
-                st.caption(f"💬 {memo}")
-            
-            # 구분선
-            if idx < len(reservations):
-                st.markdown("---")
