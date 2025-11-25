@@ -29,7 +29,7 @@ def get_toss_secret_key():
     return key if key else "test_sk_..."
 
 def get_toss_client_key():
-    """토스페이먼츠 클라이언트 키 가져오기"""
+    """토스페이먼츠 결제위젯 연동 키 가져오기 (Widget Client Key)"""
     key = os.getenv("TOSS_CLIENT_KEY", "")
     if not key and hasattr(st, 'secrets'):
         try:
@@ -39,7 +39,12 @@ def get_toss_client_key():
                 key = getattr(st.secrets, "TOSS_CLIENT_KEY", "")
         except:
             pass
-    return key if key else "test_ck_..."
+    # 결제위젯 연동 키는 test_ck_ 또는 live_ck_로 시작해야 함
+    # API 개별 연동 키(test_ok_, live_ok_)는 사용 불가
+    if key and not (key.startswith("test_ck_") or key.startswith("live_ck_")):
+        st.warning(f"⚠️ 잘못된 클라이언트 키 형식입니다. 결제위젯 연동 키(test_ck_ 또는 live_ck_로 시작)를 사용해야 합니다.")
+        key = ""  # 잘못된 키는 무시
+    return key if key else "test_ck_docs_OaPz8L5KdmQXkzRZ3y47BMw6"  # 토스페이먼츠 샌드박스 테스트 키
 
 TOSS_SECRET_KEY = get_toss_secret_key()
 TOSS_CLIENT_KEY = get_toss_client_key()
@@ -342,9 +347,23 @@ if st.session_state.get('show_payment_widget', False):
     st.subheader("💳 결제하기")
     
     # 토스페이먼츠 결제위젯 HTML
-    client_key = TOSS_CLIENT_KEY if TOSS_CLIENT_KEY != "test_ck_..." else "test_ck_docs_OaPz8L5KdmQXkzRZ3y47BMw6"
+    # 결제위젯 연동 키 사용 (test_ck_ 또는 live_ck_로 시작)
+    client_key = TOSS_CLIENT_KEY
     
-    payment_html = f"""
+    # 클라이언트 키 검증 및 안내
+    if not client_key or (not client_key.startswith('test_ck_') and not client_key.startswith('live_ck_')):
+        st.error("⚠️ **결제위젯 연동 키 오류**: 결제위젯을 사용하려면 `test_ck_` 또는 `live_ck_`로 시작하는 결제위젯 연동 키가 필요합니다. API 개별 연동 키(`test_ok_`, `live_ok_`)는 사용할 수 없습니다.")
+        st.info("💡 **해결 방법**: 토스페이먼츠 개발자센터 > API 키 > 결제위젯 연동 키에서 올바른 키를 확인하세요.")
+        st.code(f"현재 키: {client_key}", language="text")
+        if st.button("❌ 결제 취소", key="cancel_payment_widget_error"):
+            st.session_state.show_payment_widget = False
+            st.rerun()
+    else:
+        # 전화번호에서 하이픈 제거 (Python에서 미리 처리)
+        customer_phone_clean = st.session_state.pending_phone.replace('-', '') if st.session_state.pending_phone else ''
+        
+        # 결제위젯 HTML 생성
+        payment_html = f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -388,29 +407,68 @@ if st.session_state.get('show_payment_widget', False):
                     const orderName = "{st.session_state.pending_order_name}";
                     const amount = {st.session_state.pending_amount};
                     const customerName = "{st.session_state.pending_name}";
-                    const customerPhone = "{st.session_state.pending_phone.replace('-', '') if st.session_state.pending_phone else ''}";
+                    const customerPhone = "{customer_phone_clean}";
                     
                     console.log('결제위젯 초기화 시작...', {{ clientKey, orderId, amount }});
+                    
+                    // 클라이언트 키 형식 검증
+                    if (!clientKey || (!clientKey.startsWith('test_ck_') && !clientKey.startsWith('live_ck_'))) {{
+                        const errorMsg = '결제위젯 연동 키가 올바르지 않습니다. test_ck_ 또는 live_ck_로 시작하는 결제위젯 연동 키를 사용해야 합니다.';
+                        console.error(errorMsg);
+                        document.getElementById('payment-method').innerHTML = 
+                            '<div style="color: red; padding: 20px; border: 1px solid red; border-radius: 8px; margin: 20px 0;">' +
+                            '<strong>오류:</strong><br>' + errorMsg + '<br><br>' +
+                            '현재 사용 중인 키: ' + (clientKey || '없음') + '<br>' +
+                            '토스페이먼츠 개발자센터에서 결제위젯 연동 키를 확인하세요.' +
+                            '</div>';
+                        return;
+                    }}
                     
                     // TossPayments SDK 로드 확인
                     if (typeof TossPayments === 'undefined') {{
                         console.error('TossPayments SDK가 로드되지 않았습니다.');
                         document.getElementById('payment-method').innerHTML = 
-                            '<div style="color: red; padding: 20px;">결제위젯을 로드할 수 없습니다. 페이지를 새로고침해주세요.</div>';
+                            '<div style="color: red; padding: 20px; border: 1px solid red; border-radius: 8px; margin: 20px 0;">' +
+                            '<strong>오류:</strong> TossPayments SDK를 로드할 수 없습니다. 페이지를 새로고침해주세요.' +
+                            '</div>';
                         return;
                     }}
                     
-                    const tossPayments = TossPayments(clientKey);
-                    const widgets = tossPayments.widgets({{ customerKey: TossPayments.ANONYMOUS }});
+                    let tossPayments;
+                    let widgets;
+                    
+                    try {{
+                        // TossPayments 초기화
+                        tossPayments = TossPayments(clientKey);
+                        console.log('TossPayments 초기화 성공');
+                        
+                        // 결제위젯 인스턴스 생성
+                        widgets = tossPayments.widgets({{ customerKey: TossPayments.ANONYMOUS }});
+                        console.log('결제위젯 인스턴스 생성 성공');
+                    }} catch (initError) {{
+                        console.error('TossPayments 초기화 실패:', initError);
+                        const errorMsg = initError.message || '알 수 없는 오류';
+                        document.getElementById('payment-method').innerHTML = 
+                            '<div style="color: red; padding: 20px; border: 1px solid red; border-radius: 8px; margin: 20px 0;">' +
+                            '<strong>초기화 오류:</strong><br>' + errorMsg + '<br><br>' +
+                            '결제위젯 연동 키를 확인하세요. API 개별 연동 키는 사용할 수 없습니다.' +
+                            '</div>';
+                        return;
+                    }}
                     
                     async function initPayment() {{
                         try {{
+                            if (!widgets) {{
+                                throw new Error('결제위젯 인스턴스가 생성되지 않았습니다.');
+                            }}
+                            
                             console.log('결제 금액 설정 중...', amount);
                             // 결제 금액 설정
                             await widgets.setAmount({{
                                 currency: 'KRW',
                                 value: amount
                             }});
+                            console.log('결제 금액 설정 완료');
                             
                             console.log('결제 UI 렌더링 중...');
                             // 결제 UI 렌더링
@@ -481,61 +539,61 @@ if st.session_state.get('show_payment_widget', False):
         </script>
     </body>
     </html>
-    """
-    
-    # 결제위젯 표시 (iframe sandbox 속성 추가)
-    components.html(
-        payment_html, 
-        height=800,
-        scrolling=True
-    )
-    
-    # 결제 완료 확인 버튼 (테스트용)
-    st.info("💡 **테스트 모드**: 결제위젯에서 테스트 카드번호를 입력하세요. 테스트 카드: 1234-5678-9012-3456 (유효기간: 12/34, CVC: 123)")
-    
-    # 결제 완료 후 수동 확인 (실제 환경에서는 자동 처리)
-    if st.button("✅ 결제 완료 확인", key="confirm_payment_manual"):
-        # 테스트용: 결제 완료 처리
-        order_id_from_result = st.session_state.pending_order_id
-        payment_key = f"test_payment_{order_id_from_result}"
+        """
         
-        with st.spinner("결제를 확인 중입니다..."):
-            confirm_result = confirm_payment(payment_key, order_id_from_result, st.session_state.pending_amount)
+        # 결제위젯 표시 (iframe sandbox 속성 추가)
+        components.html(
+            payment_html, 
+            height=800,
+            scrolling=True
+        )
+        
+        # 결제 완료 확인 버튼 (테스트용)
+        st.info("💡 **테스트 모드**: 결제위젯에서 테스트 카드번호를 입력하세요. 테스트 카드: 1234-5678-9012-3456 (유효기간: 12/34, CVC: 123)")
+        
+        # 결제 완료 후 수동 확인 (실제 환경에서는 자동 처리)
+        if st.button("✅ 결제 완료 확인", key="confirm_payment_manual"):
+            # 테스트용: 결제 완료 처리
+            order_id_from_result = st.session_state.pending_order_id
+            payment_key = f"test_payment_{order_id_from_result}"
             
-            if confirm_result.get("success"):
-                # 예약 저장
-                save_result = save_to_supabase(
-                    st.session_state.pending_name,
-                    st.session_state.pending_phone,
-                    st.session_state.pending_date,
-                    st.session_state.pending_memo,
-                    payment_key=payment_key,
-                    order_id=order_id_from_result,
-                    amount=st.session_state.pending_amount,
-                    payment_status="PAID"
-                )
+            with st.spinner("결제를 확인 중입니다..."):
+                confirm_result = confirm_payment(payment_key, order_id_from_result, st.session_state.pending_amount)
                 
-                if save_result == True:
-                    st.success(f"✅ 결제가 완료되었고, {st.session_state.pending_name}님의 예약이 확정되었습니다!")
-                    st.balloons()
+                if confirm_result.get("success"):
+                    # 예약 저장
+                    save_result = save_to_supabase(
+                        st.session_state.pending_name,
+                        st.session_state.pending_phone,
+                        st.session_state.pending_date,
+                        st.session_state.pending_memo,
+                        payment_key=payment_key,
+                        order_id=order_id_from_result,
+                        amount=st.session_state.pending_amount,
+                        payment_status="PAID"
+                    )
                     
-                    # 세션 상태 초기화
-                    st.session_state.payment_completed = True
-                    st.session_state.current_order_id = order_id_from_result
-                    st.session_state.current_payment_key = payment_key
-                    st.session_state.current_amount = st.session_state.pending_amount
-                    st.session_state.show_payment_widget = False
-                    
-                    st.rerun()
+                    if save_result == True:
+                        st.success(f"✅ 결제가 완료되었고, {st.session_state.pending_name}님의 예약이 확정되었습니다!")
+                        st.balloons()
+                        
+                        # 세션 상태 초기화
+                        st.session_state.payment_completed = True
+                        st.session_state.current_order_id = order_id_from_result
+                        st.session_state.current_payment_key = payment_key
+                        st.session_state.current_amount = st.session_state.pending_amount
+                        st.session_state.show_payment_widget = False
+                        
+                        st.rerun()
+                    else:
+                        st.error(f"예약 저장 실패: {save_result}")
                 else:
-                    st.error(f"예약 저장 실패: {save_result}")
-            else:
-                st.error("결제 승인 실패")
-    
-    # 결제 취소 버튼
-    if st.button("❌ 결제 취소", key="cancel_payment_widget"):
-        st.session_state.show_payment_widget = False
-        st.rerun()
+                    st.error("결제 승인 실패")
+        
+        # 결제 취소 버튼
+        if st.button("❌ 결제 취소", key="cancel_payment_widget"):
+            st.session_state.show_payment_widget = False
+            st.rerun()
 
 # 결제 취소 섹션
 if st.session_state.payment_completed and st.session_state.current_payment_key:
@@ -547,16 +605,16 @@ if st.session_state.payment_completed and st.session_state.current_payment_key:
             with st.spinner("결제 취소 중..."):
                 cancel_result = cancel_payment(st.session_state.current_payment_key, "고객 요청")
                 
-                if cancel_result.get("success"):
-                    st.success("✅ 결제가 취소되었습니다.")
-                    # 예약 삭제 또는 상태 업데이트
-                    try:
-                        supabase.table("reservations").delete().eq("order_id", st.session_state.current_order_id).execute()
-                        st.session_state.payment_completed = False
-                        st.session_state.current_order_id = None
-                        st.session_state.current_payment_key = None
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"예약 삭제 실패: {str(e)}")
-                else:
-                    st.error(f"결제 취소 실패: {cancel_result.get('error')}")
+            if cancel_result.get("success"):
+                st.success("✅ 결제가 취소되었습니다.")
+                # 예약 삭제 또는 상태 업데이트
+                try:
+                    supabase.table("reservations").delete().eq("order_id", st.session_state.current_order_id).execute()
+                    st.session_state.payment_completed = False
+                    st.session_state.current_order_id = None
+                    st.session_state.current_payment_key = None
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"예약 삭제 실패: {str(e)}")
+            else:
+                st.error(f"결제 취소 실패: {cancel_result.get('error')}")
