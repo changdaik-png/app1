@@ -5,73 +5,58 @@ import base64
 import uuid
 import streamlit.components.v1 as components
 
-# ==========================================
-# 1. 설정 (Secrets에서 안전하게 가져오기)
-# ==========================================
+# 1. 페이지 기본 설정 (가장 윗줄에 있어야 함)
+st.set_page_config(page_title="심리상담 예약 시스템", layout="wide")
 
-# [Supabase 설정]
-# (이것도 Secrets에 넣으셨다면 st.secrets["SUPABASE_URL"]로 바꾸셔도 됩니다)
-SUPABASE_URL = "https://lrnutmjafqqlzopxswsa.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxybnV0bWphZnFxbHpvcHhzd3NhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMwMTU4NDIsImV4cCI6MjA3ODU5MTg0Mn0.JJJtqAKfYSzlSky0gYNKbQJF_j0YUPYf2jquyInnvpk"
-
-# [토스페이먼츠 설정 - 핵심 변경 부분!]
+# ==========================================
+# 2. 설정 및 키 값 불러오기 (안전장치 포함)
+# ==========================================
 try:
-    # 1. Streamlit Secrets(금고)에서 키를 꺼내옵니다.
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
     TOSS_CLIENT_KEY = st.secrets["TOSS_CLIENT_KEY"]
     TOSS_SECRET_KEY = st.secrets["TOSS_SECRET_KEY"]
-except FileNotFoundError:
-    # 로컬에서 secrets.toml 파일이 없을 경우를 대비한 안내
-    st.error("Secrets 파일을 찾을 수 없습니다. .streamlit/secrets.toml을 확인해주세요.")
-    st.stop()
-except KeyError:
-    # 키 이름이 틀렸을 경우 안내
-    st.error("Secrets에 'TOSS_CLIENT_KEY' 또는 'TOSS_SECRET_KEY'가 없습니다.")
+except Exception:
+    st.error("🚨 설정을 찾을 수 없습니다!")
+    st.warning("프로젝트 폴더 안에 .streamlit/secrets.toml 파일을 만들고 키 값을 넣어주세요.")
     st.stop()
 
-# 결제 금액 설정
-PAYMENT_AMOUNT = 50000
-
-# ==========================================
-# 2. 기능 함수 모음
-# ==========================================
-
-# Supabase 연결 초기화
+# Supabase 연결
 @st.cache_resource
 def init_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
-supabase = init_supabase()
+try:
+    supabase = init_supabase()
+except Exception as e:
+    st.error(f"Supabase 연결 실패: {e}")
+    st.stop()
 
-# 토스 결제 승인 요청 (서버 검증)
+# 상담료 설정
+PAYMENT_AMOUNT = 50000
+
+# ==========================================
+# 3. 기능 함수 (결제 승인 & DB 저장)
+# ==========================================
+
 def confirm_payment(payment_key, order_id, amount):
-    # 시크릿 키가 입력되지 않았거나 기본값인 경우 (테스트용 가짜 승인)
-    if "YOUR_SECRET_KEY" in TOSS_SECRET_KEY:
-         return {"success": True, "data": {"status": "DONE"}}
-         
+    """토스 서버에 '진짜 결제됐냐'고 물어보는 함수"""
+    # 시크릿 키 암호화 (Basic Auth)
+    secret_key_encoded = base64.b64encode(f"{TOSS_SECRET_KEY}:".encode()).decode()
+    headers = {
+        "Authorization": f"Basic {secret_key_encoded}",
+        "Content-Type": "application/json"
+    }
+    data = {"paymentKey": payment_key, "orderId": order_id, "amount": amount}
+    
     try:
-        # 시크릿 키를 Base64로 인코딩
-        secret_key_encoded = base64.b64encode(f"{TOSS_SECRET_KEY}:".encode()).decode()
-        headers = {
-            "Authorization": f"Basic {secret_key_encoded}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            "paymentKey": payment_key,
-            "orderId": order_id,
-            "amount": amount
-        }
-        # 토스 서버에 승인 요청
         res = requests.post("https://api.tosspayments.com/v1/payments/confirm", headers=headers, json=data)
-        
-        if res.status_code == 200:
-            return {"success": True, "data": res.json()}
-        else:
-            return {"success": False, "error": res.json()}
+        return {"success": True, "data": res.json()} if res.status_code == 200 else {"success": False, "error": res.json()}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# Supabase에 예약 정보 저장
 def save_reservation(name, phone, date, memo, payment_key, order_id, amount):
+    """결제 완료된 정보를 Supabase에 저장하는 함수"""
     data = {
         "name": name,
         "phone": phone,
@@ -80,7 +65,7 @@ def save_reservation(name, phone, date, memo, payment_key, order_id, amount):
         "payment_key": payment_key,
         "order_id": order_id,
         "amount": amount,
-        "payment_status": "PAID" # 결제 완료 상태
+        "payment_status": "PAID"
     }
     try:
         supabase.table("reservations").insert(data).execute()
@@ -89,39 +74,34 @@ def save_reservation(name, phone, date, memo, payment_key, order_id, amount):
         return str(e)
 
 # ==========================================
-# 3. 메인 화면 로직 시작
+# 4. 메인 화면 로직
 # ==========================================
 
-st.set_page_config(page_title="심리상담 예약", layout="wide")
-st.title("🏥 심리상담 예약 시스템")
+st.title("🏥 심리상담 예약 & 결제 시스템")
 
-# 세션 상태 초기화 (새로고침 되어도 데이터 유지)
+# (1) 세션 상태 초기화 (결제하고 돌아와도 정보 기억하기 위함)
 if 'pending_payment' not in st.session_state:
     st.session_state.pending_payment = {}
 
-# ------------------------------------------
-# [STEP 1] 결제 성공 후 돌아왔는지 확인
-# ------------------------------------------
+# (2) 결제 성공 후 복귀 처리 (가장 먼저 실행)
 query_params = st.query_params
 payment_status = query_params.get("payment")
 
 if payment_status == "success":
-    # URL에 있는 정보 가져오기
     payment_key = query_params.get("paymentKey")
     order_id = query_params.get("orderId")
     amount = query_params.get("amount")
     
-    # 아까 입력한 예약자 정보 가져오기
+    # 아까 저장해둔 예약자 정보 꺼내기
     pending = st.session_state.pending_payment
     
-    # 정보가 다 있으면 저장 진행
+    # 정보가 일치하면 승인 및 저장 진행
     if pending and pending.get("order_id") == order_id:
-        with st.spinner("결제 승인 및 예약 저장 중입니다..."):
-            # 1. 토스에 승인 요청
+        with st.spinner("결제 승인 중입니다... 잠시만 기다려주세요."):
             confirm = confirm_payment(payment_key, order_id, int(amount))
             
             if confirm["success"]:
-                # 2. Supabase에 저장
+                # DB 저장
                 saved = save_reservation(
                     pending["name"], pending["phone"], pending["date"], 
                     pending["memo"], payment_key, order_id, int(amount)
@@ -130,59 +110,57 @@ if payment_status == "success":
                 if saved == True:
                     st.success(f"✅ {pending['name']}님, 예약이 확정되었습니다!")
                     st.balloons()
-                    # 저장 완료 후 정보 초기화
+                    # 세션 및 URL 청소
                     st.session_state.pending_payment = {}
                     st.query_params.clear()
                 else:
-                    st.error(f"데이터베이스 저장 실패: {saved}")
+                    st.error(f"❌ 저장 실패: {saved}")
+                    st.info("💡 힌트: Supabase에 'reservations' 테이블이 있는지 확인하세요.")
             else:
-                st.error(f"결제 승인 실패: {confirm.get('error')}")
+                st.error(f"❌ 결제 승인 실패: {confirm.get('error')}")
     else:
-        st.warning("세션이 만료되었습니다. 결제는 성공했으나 예약 정보가 유실되었습니다.")
+        st.warning("⚠️ 세션이 만료되었습니다. (결제는 성공했으나 예약 정보가 유실됨)")
 
 elif payment_status == "fail":
-    st.error("결제가 취소되었거나 실패했습니다.")
+    st.error("결제가 취소되었습니다.")
     st.query_params.clear()
 
-# ------------------------------------------
-# [STEP 2] 예약 정보 입력 폼
-# ------------------------------------------
-st.write("원장님, 테스트를 위해 예약 정보를 입력해주세요.")
+# (3) 예약 정보 입력 폼
+st.markdown("---")
+st.subheader("📝 예약 신청")
 
 with st.form("reservation_form"):
     col1, col2 = st.columns(2)
-    with col1:
-        name = st.text_input("신청자 이름", placeholder="예: 김철수")
-    with col2:
-        phone = st.text_input("연락처", placeholder="010-0000-0000")
+    name = col1.text_input("신청자 성함")
+    phone = col2.text_input("연락처 (- 없이 입력)")
     
-    date = st.date_input("상담 희망 날짜")
-    memo = st.text_area("요청 사항 (선택)")
+    date = st.date_input("희망 상담 날짜")
+    memo = st.text_area("상담 요청 내용 (선택)")
     
     # 결제 버튼
     submit = st.form_submit_button(f"💳 {PAYMENT_AMOUNT:,}원 결제하기")
 
     if submit:
         if not name or not phone:
-            st.error("이름과 연락처를 꼭 입력해주세요!")
+            st.error("성함과 연락처를 꼭 입력해주세요!")
         else:
             # 고유 주문번호 생성
             new_order_id = f"order_{uuid.uuid4().hex[:10]}"
             
-            # 1. 입력 정보를 세션에 임시 저장 (결제하고 돌아올 때 쓰려고)
+            # 세션에 정보 임시 저장
             st.session_state.pending_payment = {
                 "name": name, "phone": phone, "date": str(date), 
                 "memo": memo, "order_id": new_order_id, "amount": PAYMENT_AMOUNT
             }
             
-            # 2. 토스 결제창 HTML 생성 (높이를 키웠습니다!)
+            # -------------------------------------------------------
+            # [핵심] 토스 결제창 (높이 800px + 부모창 리다이렉트)
+            # -------------------------------------------------------
             payment_html = f"""
             <html>
             <head>
               <script src="https://js.tosspayments.com/v1/payment"></script>
-              <style>
-                body {{ font-family: sans-serif; text-align: center; padding-top: 20px; }}
-              </style>
+              <style>body {{ font-family: sans-serif; text-align: center; }}</style>
             </head>
             <body>
               <h3>결제창을 불러오고 있습니다...</h3>
@@ -190,20 +168,20 @@ with st.form("reservation_form"):
                 var clientKey = '{TOSS_CLIENT_KEY}';
                 var tossPayments = TossPayments(clientKey);
                 
-                // 현재 페이지 주소 (돌아올 곳)
+                // 현재 창의 부모(원래 Streamlit 페이지) 주소를 가져옴
                 var currentUrl = window.parent.location.href.split('?')[0];
 
                 tossPayments.requestPayment('카드', {{
                   amount: {PAYMENT_AMOUNT},
                   orderId: '{new_order_id}',
-                  orderName: '심리상담 예약',
+                  orderName: '심리상담 1회 예약',
                   customerName: '{name}',
                   successUrl: currentUrl + "?payment=success", 
                   failUrl: currentUrl + "?payment=fail",
                 }})
                 .catch(function (error) {{
                     if (error.code === 'USER_CANCEL') {{
-                        // 사용자가 취소함
+                        // 취소 시 조용히 있음
                     }} else {{
                         alert(error.message);
                     }}
@@ -212,33 +190,32 @@ with st.form("reservation_form"):
             </body>
             </html>
             """
-            
-            # [핵심 수정] 높이를 800으로 설정하여 결제창이 잘리지 않게 함
+            # iframe 높이를 800으로 설정하여 결제창 잘림 방지
             components.html(payment_html, height=800, scrolling=True)
 
-# ------------------------------------------
-# [STEP 3] 관리자용 예약 명단 확인
-# ------------------------------------------
+# (4) 관리자용 예약 명단 (하단 배치)
 st.markdown("---")
-st.subheader("📋 실시간 예약 현황 (Admin View)")
+st.subheader("📋 [관리자용] 실시간 예약 현황")
 
-# 데이터 불러오기
 try:
     res = supabase.table("reservations").select("*").order("created_at", desc=True).execute()
     
     if res.data:
+        # 데이터를 깔끔한 표나 카드로 보여주기
         for item in res.data:
-            with st.expander(f"[{item['payment_status']}] {item['name']} - {item['date']}"):
+            with st.expander(f"{item['date']} - {item['name']} ({item['payment_status']})"):
                 st.write(f"📞 연락처: {item['phone']}")
-                st.write(f"📝 메모: {item.get('memo', '없음')}")
-                st.write(f"💰 결제금액: {item.get('amount', 0):,}원")
+                st.write(f"📝 메모: {item.get('memo', '-')}")
+                st.write(f"💰 금액: {item.get('amount', 0):,}원")
                 st.write(f"🔑 주문번호: {item['order_id']}")
                 
-                # 삭제 버튼
-                if st.button("예약 삭제", key=item['id']):
+                # 삭제 기능
+                if st.button("내역 삭제", key=item['id']):
                     supabase.table("reservations").delete().eq("id", item['id']).execute()
                     st.rerun()
     else:
         st.info("아직 접수된 예약이 없습니다.")
+
 except Exception as e:
-    st.error(f"데이터를 불러오는 중 오류가 발생했습니다: {e}")
+    st.error("데이터를 불러오지 못했습니다.")
+    st.code(str(e))
