@@ -76,6 +76,23 @@ def request_payment(order_id, amount, order_name, customer_name):
 
 def confirm_payment(payment_key, order_id, amount):
     """토스페이먼츠 결제 승인"""
+    # 테스트 모드 확인 (시크릿 키가 test_로 시작하면 테스트 모드)
+    is_test_mode = TOSS_SECRET_KEY.startswith("test_") or TOSS_SECRET_KEY == "test_sk_..."
+    
+    if is_test_mode:
+        # 테스트 모드: 실제 API 호출 없이 시뮬레이션
+        return {
+            "success": True, 
+            "data": {
+                "status": "DONE",
+                "paymentKey": payment_key,
+                "orderId": order_id,
+                "totalAmount": amount,
+                "approvedAt": datetime.now().isoformat()
+            }
+        }
+    
+    # 실제 운영 모드: 토스페이먼츠 API 호출
     try:
         headers = get_toss_auth_header()
         headers["Content-Type"] = "application/json"
@@ -86,7 +103,6 @@ def confirm_payment(payment_key, order_id, amount):
             "amount": amount
         }
         
-        # 실제 API 호출 (테스트 환경)
         response = requests.post(
             "https://api.tosspayments.com/v1/payments/confirm",
             headers=headers,
@@ -97,13 +113,32 @@ def confirm_payment(payment_key, order_id, amount):
         if response.status_code == 200:
             return {"success": True, "data": response.json()}
         else:
-            return {"success": False, "error": response.json()}
+            error_data = response.json() if response.text else {"code": "UNKNOWN_ERROR", "message": str(response.status_code)}
+            return {"success": False, "error": error_data}
+    except requests.exceptions.RequestException as e:
+        # 네트워크 오류 등
+        return {"success": False, "error": {"code": "NETWORK_ERROR", "message": f"API 호출 실패: {str(e)}"}}
     except Exception as e:
-        # 테스트 환경에서는 실제 API 호출 없이 시뮬레이션
-        return {"success": True, "data": {"status": "DONE", "paymentKey": payment_key}}
+        # 기타 오류
+        return {"success": False, "error": {"code": "UNKNOWN_ERROR", "message": str(e)}}
 
 def cancel_payment(payment_key, cancel_reason="고객 요청"):
     """토스페이먼츠 결제 취소"""
+    # 테스트 모드 확인
+    is_test_mode = TOSS_SECRET_KEY.startswith("test_") or TOSS_SECRET_KEY == "test_sk_..."
+    
+    if is_test_mode:
+        # 테스트 모드: 시뮬레이션
+        return {
+            "success": True, 
+            "data": {
+                "status": "CANCELED",
+                "paymentKey": payment_key,
+                "canceledAt": datetime.now().isoformat()
+            }
+        }
+    
+    # 실제 운영 모드: 토스페이먼츠 API 호출
     try:
         headers = get_toss_auth_header()
         headers["Content-Type"] = "application/json"
@@ -112,7 +147,6 @@ def cancel_payment(payment_key, cancel_reason="고객 요청"):
             "cancelReason": cancel_reason
         }
         
-        # 실제 API 호출
         response = requests.post(
             f"https://api.tosspayments.com/v1/payments/{payment_key}/cancel",
             headers=headers,
@@ -123,10 +157,12 @@ def cancel_payment(payment_key, cancel_reason="고객 요청"):
         if response.status_code == 200:
             return {"success": True, "data": response.json()}
         else:
-            return {"success": False, "error": response.json()}
+            error_data = response.json() if response.text else {"code": "UNKNOWN_ERROR", "message": str(response.status_code)}
+            return {"success": False, "error": error_data}
+    except requests.exceptions.RequestException as e:
+        return {"success": False, "error": {"code": "NETWORK_ERROR", "message": f"API 호출 실패: {str(e)}"}}
     except Exception as e:
-        # 테스트 환경에서는 시뮬레이션
-        return {"success": True, "data": {"status": "CANCELED"}}
+        return {"success": False, "error": {"code": "UNKNOWN_ERROR", "message": str(e)}}
 
 # --- 예약 함수 (결제 정보 포함) ---
 def save_to_supabase(name, phone, date, memo, payment_key=None, order_id=None, amount=None, payment_status="PENDING"):
@@ -171,6 +207,11 @@ def get_reservations():
 # --- 3. 화면 구성 (Streamlit) ---
 st.title("🏥 심리상담 예약 시스템")
 st.write("원장님, 테스트를 위해 예약 정보를 입력해주세요.")
+
+# 테스트 모드 안내
+is_test_mode = TOSS_SECRET_KEY.startswith("test_") or TOSS_SECRET_KEY == "test_sk_..."
+if is_test_mode:
+    st.info("ℹ️ **테스트 모드**: 실제 결제가 발생하지 않으며, 결제가 시뮬레이션됩니다. 운영 환경에서는 실제 토스페이먼츠 API 키를 설정하세요.")
 
 # 세션 상태 초기화
 if 'payment_completed' not in st.session_state:
@@ -219,8 +260,11 @@ with st.form("reservation_form"):
                     confirm_result = confirm_payment(payment_key, order_id, DEFAULT_PAYMENT_AMOUNT)
                     
                     if confirm_result.get("success"):
+                        payment_data = confirm_result.get("data", {})
+                        
                         # 결제 검증: 금액 확인
-                        if confirm_result.get("data", {}).get("totalAmount") == DEFAULT_PAYMENT_AMOUNT or True:  # 테스트용
+                        confirmed_amount = payment_data.get("totalAmount", DEFAULT_PAYMENT_AMOUNT)
+                        if confirmed_amount == DEFAULT_PAYMENT_AMOUNT:
                             # 결제 완료 후 예약 저장
                             save_result = save_to_supabase(
                                 name, phone, date, memo,
@@ -244,9 +288,12 @@ with st.form("reservation_form"):
                             else:
                                 st.error(f"예약 저장 실패: {save_result}")
                         else:
-                            st.error("❌ 결제 금액이 일치하지 않습니다. 결제가 취소되었습니다.")
+                            st.error(f"❌ 결제 금액이 일치하지 않습니다. (요청: {DEFAULT_PAYMENT_AMOUNT:,}원, 승인: {confirmed_amount:,}원)")
                     else:
-                        st.error(f"결제 승인 실패: {confirm_result.get('error')}")
+                        error_info = confirm_result.get('error', {})
+                        error_code = error_info.get('code', 'UNKNOWN')
+                        error_message = error_info.get('message', str(error_info))
+                        st.error(f"❌ 결제 승인 실패: [{error_code}] {error_message}")
                 else:
                     st.error(f"결제 요청 실패: {payment_request.get('error')}")
 
