@@ -8,12 +8,13 @@ supabase: Client = create_client(url, key)
 
 # --- 2. 예약 함수 (아까 만드신 엔진) ---
 def save_to_supabase(name, phone, date, memo):
+    # status 필드를 제거하여 테이블에 status 컬럼이 없어도 작동하도록 함
     data = {
         "name": name,
         "phone": phone,
         "date": str(date), # 날짜는 문자열로 변환
-        "memo": memo,
-        "status": "대기중"
+        "memo": memo
+        # status 필드 제거: 테이블에 status 컬럼이 없으면 오류 발생
     }
     try:
         supabase.table("reservations").insert(data).execute()
